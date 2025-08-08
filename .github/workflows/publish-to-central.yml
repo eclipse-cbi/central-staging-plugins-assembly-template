@@ -1,0 +1,56 @@
+name: Publish Release Bundle to Maven Central
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: 
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java and Maven Central credentials
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Generate Sonatype Bearer Token
+        id: bearer_token
+        run: |
+          echo "CENTRAL_SONATYPE_TOKEN=$(echo -n '${{ secrets.CENTRAL_SONATYPE_TOKEN_USERNAME }}:${{ secrets.CENTRAL_SONATYPE_TOKEN_PASSWORD }}' | base64)" >> $GITHUB_ENV
+
+      - name: Set project version from tag
+        run: mvn --batch-mode versions:set -DnewVersion=${{ github.event.release.tag_name }} -DgenerateBackupPoms=false
+
+      - name: Build project and create bundle
+        run: mvn --batch-mode clean install -DskipTests            
+        env:
+          MAVEN_USERNAME: ${{ secrets.CENTRAL_SONATYPE_TOKEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.CENTRAL_SONATYPE_TOKEN_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          
+      - name: Publish package
+        run: |        
+          BUNDLE_FILE=$(find target -name "*-bin.zip" | head -1)
+          if [ -z "$BUNDLE_FILE" ]; then
+            echo "Error: No bundle file found"
+            exit 1
+          fi
+          echo "Publishing bundle: $BUNDLE_FILE"
+          mvn --batch-mode central-staging-plugins:rc-upload \
+            -Dcentral.automaticPublishing=true \
+            -Dcentral.artifactFile="$BUNDLE_FILE" 
+        env:
+          MAVEN_PASSWORD: ${{ env.CENTRAL_SONATYPE_TOKEN }}
+
+
